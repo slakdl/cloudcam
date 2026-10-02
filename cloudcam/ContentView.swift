@@ -156,8 +156,8 @@ struct ContentView: View {
                 show(waiting == 0 ? "Published to the site" : "Published, \(waiting) still waiting")
             } catch Publisher.Failure.noToken {
                 show("Add a GitHub token to publish")
-            } catch Publisher.Failure.rejected(let status) where status == 401 || status == 403 {
-                show("GitHub refused the token. Check it in settings.")
+            } catch Publisher.Failure.refused(_, let reason) {
+                show("GitHub said: \(reason). Check the token's Contents permission.")
             } catch {
                 show("No connection. It'll publish next time.")
             }

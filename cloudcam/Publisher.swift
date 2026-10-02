@@ -16,6 +16,8 @@ actor Publisher {
     enum Failure: Error {
         case noToken
         case rejected(status: Int)
+        /// GitHub said no, with its own explanation.
+        case refused(status: Int, reason: String)
     }
 
     /// One photo waiting to go up.
@@ -153,9 +155,17 @@ actor Publisher {
         if let sha { body["sha"] = sha }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 || status == 201 else { throw Failure.rejected(status: status) }
+        guard status == 200 || status == 201 else {
+            if status == 401 || status == 403 || status == 404 {
+                // 404 here means the token can't see the repository at all.
+                struct Message: Decodable { var message: String }
+                let reason = (try? JSONDecoder().decode(Message.self, from: data))?.message ?? "HTTP \(status)"
+                throw Failure.refused(status: status, reason: reason)
+            }
+            throw Failure.rejected(status: status)
+        }
     }
 
     private static func request(path: String, token: String) -> URLRequest {
