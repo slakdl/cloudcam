@@ -50,11 +50,14 @@
       list-style: none;
     }
 
+    .grid {
+      align-items: start; /* photos keep their own height, so rows line up at the top */
+    }
+
     .photo {
       display: block;
       width: 100%;
-      aspect-ratio: 1;
-      object-fit: cover;
+      height: auto; /* the photo's own shape, never cropped */
       background: var(--placeholder); /* grey while the photo loads */
     }
 
