@@ -55,7 +55,7 @@
       width: 100%;
       aspect-ratio: 1;
       object-fit: cover;
-      background: var(--placeholder); /* grey square until a real photo is set */
+      background: var(--placeholder); /* grey while the photo loads */
     }
 
     .caption {
@@ -87,45 +87,49 @@
   <ul class="grid" id="grid"></ul>
 
   <script>
-    // Each photo: when it was taken, plus `src` once real uploads exist.
-    // Without a src it shows as a grey square.
-    const photos = placeholders(36);
-
-    function placeholders(n) {
-      // Fixed seed, so the placeholder dates stay the same between loads
-      let seed = 7;
-      const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-      let t = new Date(2026, 9, 2, 21, 14).getTime();
-      return Array.from({ length: n }, () => {
-        t -= (20 + random() * 60 * 18) * 60 * 1000; // 20 minutes to ~18 hours apart
-        return { takenAt: new Date(t) };
-      });
-    }
-
+    // The camera app adds each published photo to photos.json, newest first:
+    // [{ "src": "photos/2026-10-03-091512.jpg", "takenAt": "2026-10-03T09:15:12Z" }, ...]
     const pad = (n) => String(n).padStart(2, "0");
     const formatDate = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
     const formatTime = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
     const grid = document.getElementById("grid");
-    photos
-      .sort((a, b) => b.takenAt - a.takenAt) // newest first
-      .forEach((p) => {
-        const li = document.createElement("li");
-        const img = document.createElement(p.src ? "img" : "div");
-        img.className = "photo";
-        if (p.src) {
+    const count = document.getElementById("count");
+
+    function render(photos) {
+      photos
+        .map((p) => ({ ...p, takenAt: new Date(p.takenAt) }))
+        .sort((a, b) => b.takenAt - a.takenAt) // newest first
+        .forEach((p) => {
+          const li = document.createElement("li");
+          const link = document.createElement("a");
+          link.href = p.src;
+          const img = document.createElement("img");
+          img.className = "photo";
           img.src = p.src;
           img.alt = `Photo taken ${formatDate(p.takenAt)} at ${formatTime(p.takenAt)}`;
           img.loading = "lazy";
-        }
-        const caption = document.createElement("div");
-        caption.className = "caption";
-        caption.innerHTML = `<span>${formatDate(p.takenAt)}</span><span>${formatTime(p.takenAt)}</span>`;
-        li.append(img, caption);
-        grid.append(li);
-      });
+          link.append(img);
+          const caption = document.createElement("div");
+          caption.className = "caption";
+          caption.innerHTML = `<span>${formatDate(p.takenAt)}</span><span>${formatTime(p.takenAt)}</span>`;
+          li.append(link, caption);
+          grid.append(li);
+        });
+      count.textContent = photos.length === 1 ? "1 photo" : `${photos.length} photos`;
+    }
 
-    document.getElementById("count").textContent = `${photos.length} photos`;
+    // Skip the browser cache, so a photo shows up as soon as the site has rebuilt.
+    fetch(`photos.json?${Date.now()}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => [])
+      .then((photos) => {
+        if (photos.length === 0) {
+          count.textContent = "no photos yet";
+          return;
+        }
+        render(photos);
+      });
   </script>
 </body>
 </html>

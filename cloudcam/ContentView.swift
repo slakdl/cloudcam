@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var isSaving = false
     @State private var flash = false
     @State private var message: String?
+    @State private var showsSettings = false
 
     init() {
         let camera = CameraService()
@@ -43,13 +44,16 @@ struct ContentView: View {
                 }
                 Spacer()
                 modePicker
-                shutterButton
+                controls
             }
             .padding()
 
             if camera.status == .denied {
                 deniedMessage
             }
+        }
+        .task {
+            try? await Publisher.shared.sendWaiting()  // anything left over from last time
         }
         .task { await camera.start() }
         .onDisappear { camera.stop() }
@@ -79,8 +83,35 @@ struct ContentView: View {
         .padding(.bottom, 16)
     }
 
+    /// Settings on the left, the shutter (save) in the middle, save + publish on the right.
+    private var controls: some View {
+        HStack {
+            sideButton("gearshape", label: "Publishing settings") { showsSettings = true }
+            Spacer()
+            shutterButton
+            Spacer()
+            sideButton("arrow.up.circle", label: "Save and publish") { takePhoto(publish: true) }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 24)
+        .sheet(isPresented: $showsSettings) { SettingsView() }
+    }
+
+    private func sideButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 26, weight: .regular))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(.black.opacity(0.35), in: Circle())
+        }
+        .disabled(isSaving || camera.status == .denied)
+        .opacity(isSaving ? 0.5 : 1)
+        .accessibilityLabel(label)
+    }
+
     private var shutterButton: some View {
-        Button(action: takePhoto) {
+        Button { takePhoto(publish: false) } label: {
             ZStack {
                 Circle().strokeBorder(.white, lineWidth: 4)
                 Circle().fill(.white).padding(7)
@@ -89,29 +120,47 @@ struct ContentView: View {
             .opacity(isSaving ? 0.5 : 1)
         }
         .disabled(isSaving || camera.status == .denied)
-        .padding(.bottom, 24)
         .accessibilityLabel("Take photo")
     }
 
-    private func takePhoto() {
+    private func takePhoto(publish: Bool) {
         // Save exactly what's on screen. Encode now, because the picture changes every frame.
         guard let picture = renderer.snapshot(), let jpeg = PhotoSaver.jpeg(from: picture) else { return }
+        if publish && Keychain.token == nil {
+            showsSettings = true
+            show("Add a GitHub token first, then publish")
+            return
+        }
 
         isSaving = true
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         withAnimation(.easeOut(duration: 0.08)) { flash = true }
         withAnimation(.easeIn(duration: 0.25).delay(0.08)) { flash = false }
+        let takenAt = Date()
 
         Task {
             do {
                 try await PhotoSaver.save(jpeg)
-                show("Saved to Photos")
+                show(publish ? "Saved, publishing…" : "Saved to Photos")
             } catch PhotoSaver.Failure.accessDenied {
                 show("Photos access is off. Turn it on in Settings to save pictures.")
             } catch {
                 show("Couldn't save the picture")
             }
             isSaving = false
+
+            // Publishing carries on in the background, so you can keep shooting.
+            guard publish else { return }
+            do {
+                let waiting = try await Publisher.shared.publish(jpeg, takenAt: takenAt)
+                show(waiting == 0 ? "Published to the site" : "Published, \(waiting) still waiting")
+            } catch Publisher.Failure.noToken {
+                show("Add a GitHub token to publish")
+            } catch Publisher.Failure.rejected(let status) where status == 401 || status == 403 {
+                show("GitHub refused the token. Check it in settings.")
+            } catch {
+                show("No connection. It'll publish next time.")
+            }
         }
     }
 
