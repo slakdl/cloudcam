@@ -158,8 +158,10 @@ struct ContentView: View {
                 show("Add a GitHub token to publish")
             } catch Publisher.Failure.refused(_, let reason) {
                 show("GitHub said: \(reason). Check the token's Contents permission.")
-            } catch {
+            } catch is URLError {
                 show("No connection. It'll publish next time.")
+            } catch {
+                show("Couldn't publish yet (\(error)). It'll try again next time.")
             }
         }
     }

@@ -114,7 +114,8 @@ actor Publisher {
     /// moment, GitHub refuses the save, so read it again and retry.
     private func addToList(_ pending: Pending, token: String) async throws {
         let path = "docs/photos.json"
-        for _ in 0..<3 {
+        for attempt in 0..<5 {
+            if attempt > 0 { try await Task.sleep(for: .seconds(Double(attempt))) }
             let existing = try await existingFile(at: path, token: token)
             var entries = (existing.flatMap { try? JSONDecoder().decode([Entry].self, from: $0.content) }) ?? []
             let src = "photos/\(pending.name)"
@@ -174,6 +175,9 @@ actor Publisher {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         request.timeoutInterval = 60
+        // Never answer from the phone's cache: GitHub marks these as cacheable for a minute,
+        // and an out-of-date photos.json makes the next save clash with the last one.
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         return request
     }
 }
