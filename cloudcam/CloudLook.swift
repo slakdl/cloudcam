@@ -11,6 +11,7 @@ enum CloudLook {
     enum Mode: String, CaseIterable, Identifiable {
         case cloud = "Cloud"
         case pixel = "Pixel"
+        case web = "Web"
 
         var id: String { rawValue }
     }

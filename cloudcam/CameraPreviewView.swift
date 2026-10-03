@@ -96,10 +96,12 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         else { return }
 
         // 1. Apply the look and draw the result into an off-screen buffer.
-        let styled = (mode == .pixel
-            ? PixelLook.apply(to: source)
-            : CloudLook.apply(to: source, time: time, rainbow: updatedRainbow())
-        ).cropped(to: source.extent)
+        let styled: CIImage
+        switch mode {
+        case .cloud: styled = CloudLook.apply(to: source, time: time, rainbow: updatedRainbow())
+        case .pixel: styled = PixelLook.apply(to: source)
+        case .web: styled = WebLook.apply(to: source, time: time)
+        }
         guard let target = nextBuffer(for: source.extent.size) else { return }
 
         let destination = CIRenderDestination(pixelBuffer: target)
