@@ -54,6 +54,40 @@
       align-items: start; /* photos keep their own height, so rows line up at the top */
     }
 
+    /* One filter per camera. A new one appears by itself the first time a camera publishes. */
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 20px;
+      margin: -12px 0 32px;
+      font-size: 13px;
+      list-style: none;
+    }
+
+    .filters button {
+      font: inherit;
+      color: var(--muted);
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    .filters button:hover,
+    .filters button[aria-pressed="true"] {
+      color: var(--ink);
+    }
+
+    .filters button[aria-pressed="true"] {
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .filters .n {
+      font-variant-numeric: tabular-nums;
+      margin-left: 4px;
+    }
+
     .photo {
       display: block;
       width: 100%;
@@ -83,9 +117,13 @@
 </head>
 <body>
   <header>
-    <h1>cloudcam</h1>
+    <h1>i hope you continue to see the world that way</h1>
     <span class="count" id="count"></span>
   </header>
+
+  <nav aria-label="Cameras">
+    <ul class="filters" id="filters"></ul>
+  </nav>
 
   <ul class="grid" id="grid"></ul>
 
@@ -98,40 +136,71 @@
 
     const grid = document.getElementById("grid");
     const count = document.getElementById("count");
+    const filters = document.getElementById("filters");
+    let photos = [];
 
-    function render(photos) {
-      photos
-        .map((p) => ({ ...p, takenAt: new Date(p.takenAt) }))
-        .sort((a, b) => b.takenAt - a.takenAt) // newest first
-        .forEach((p) => {
-          const li = document.createElement("li");
-          const link = document.createElement("a");
-          link.href = p.src;
-          const img = document.createElement("img");
-          img.className = "photo";
-          img.src = p.src;
-          img.alt = `Photo taken ${formatDate(p.takenAt)} at ${formatTime(p.takenAt)}`;
-          img.loading = "lazy";
-          link.append(img);
-          const caption = document.createElement("div");
-          caption.className = "caption";
-          caption.innerHTML = `<span>${formatDate(p.takenAt)}</span><span>${formatTime(p.takenAt)}</span>`;
-          li.append(link, caption);
-          grid.append(li);
-        });
-      count.textContent = photos.length === 1 ? "1 photo" : `${photos.length} photos`;
+    function render() {
+      // The chosen camera lives in the address (#pixel), so a filtered view can be shared.
+      const chosen = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+      const shown = photos.filter((p) => !chosen || (p.camera || "").toLowerCase() === chosen);
+
+      // Filters: "All", then every camera that has published, in the order they first appeared.
+      const cameras = [];
+      [...photos].reverse().forEach((p) => p.camera && !cameras.includes(p.camera) && cameras.push(p.camera));
+      filters.replaceChildren(
+        filterButton("All", "", photos.length, !chosen),
+        ...cameras.map((c) => filterButton(c, c.toLowerCase(),
+          photos.filter((p) => p.camera === c).length, chosen === c.toLowerCase()))
+      );
+
+      grid.replaceChildren(...shown.map((p) => {
+        const li = document.createElement("li");
+        const link = document.createElement("a");
+        link.href = p.src;
+        const img = document.createElement("img");
+        img.className = "photo";
+        img.src = p.src;
+        img.alt = `Photo taken ${formatDate(p.takenAt)} at ${formatTime(p.takenAt)}${p.camera ? ` with ${p.camera}` : ""}`;
+        img.loading = "lazy";
+        link.append(img);
+        const caption = document.createElement("div");
+        caption.className = "caption";
+        caption.innerHTML = `<span>${formatDate(p.takenAt)}</span><span>${formatTime(p.takenAt)}</span>`;
+        li.append(link, caption);
+        return li;
+      }));
+      count.textContent = shown.length === 1 ? "1 photo" : `${shown.length} photos`;
     }
+
+    function filterButton(label, value, n, pressed) {
+      const li = document.createElement("li");
+      const button = document.createElement("button");
+      button.setAttribute("aria-pressed", pressed);
+      button.innerHTML = `${label}<span class="n">${n}</span>`;
+      button.addEventListener("click", () => {
+        if (value) location.hash = value;
+        else history.replaceState(null, "", location.pathname);
+        render();
+      });
+      li.append(button);
+      return li;
+    }
+
+    window.addEventListener("hashchange", render);
 
     // Skip the browser cache, so a photo shows up as soon as the site has rebuilt.
     fetch(`photos.json?${Date.now()}`)
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => [])
-      .then((photos) => {
+      .then((list) => {
+        photos = list
+          .map((p) => ({ ...p, takenAt: new Date(p.takenAt) }))
+          .sort((a, b) => b.takenAt - a.takenAt); // newest first
         if (photos.length === 0) {
           count.textContent = "no photos yet";
           return;
         }
-        render(photos);
+        render();
       });
   </script>
 </body>

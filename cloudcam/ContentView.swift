@@ -137,6 +137,7 @@ struct ContentView: View {
         withAnimation(.easeOut(duration: 0.08)) { flash = true }
         withAnimation(.easeIn(duration: 0.25).delay(0.08)) { flash = false }
         let takenAt = Date()
+        let camera = mode.rawValue
 
         Task {
             do {
@@ -152,7 +153,7 @@ struct ContentView: View {
             // Publishing carries on in the background, so you can keep shooting.
             guard publish else { return }
             do {
-                let waiting = try await Publisher.shared.publish(jpeg, takenAt: takenAt)
+                let waiting = try await Publisher.shared.publish(jpeg, takenAt: takenAt, camera: camera)
                 show(waiting == 0 ? "Published to the site" : "Published, \(waiting) still waiting")
             } catch Publisher.Failure.noToken {
                 show("Add a GitHub token to publish")

@@ -24,12 +24,14 @@ actor Publisher {
     private struct Pending: Codable {
         var name: String  // e.g. 2026-10-03-091512.jpg
         var takenAt: Date
+        var camera: String?  // which look took it, e.g. "Cloud"
     }
 
     /// An entry in `photos.json`.
     private struct Entry: Codable {
         var src: String
         var takenAt: String
+        var camera: String?
     }
 
     private var isSending = false
@@ -38,10 +40,10 @@ actor Publisher {
 
     /// Puts the photo in the queue and tries to send everything that's waiting.
     /// Returns how many photos are still waiting afterwards (0 means all published).
-    func publish(_ jpeg: Data, takenAt: Date) async throws -> Int {
+    func publish(_ jpeg: Data, takenAt: Date, camera: String) async throws -> Int {
         let name = Self.fileName(for: takenAt)
         try jpeg.write(to: queueFolder.appendingPathComponent(name))
-        let info = try JSONEncoder.iso.encode(Pending(name: name, takenAt: takenAt))
+        let info = try JSONEncoder.iso.encode(Pending(name: name, takenAt: takenAt, camera: camera))
         try info.write(to: queueFolder.appendingPathComponent(name + ".json"))
         return try await sendWaiting()
     }
@@ -121,7 +123,7 @@ actor Publisher {
             let src = "photos/\(pending.name)"
             guard !entries.contains(where: { $0.src == src }) else { return }
 
-            entries.insert(Entry(src: src, takenAt: ISO8601DateFormatter().string(from: pending.takenAt)), at: 0)
+            entries.insert(Entry(src: src, takenAt: ISO8601DateFormatter().string(from: pending.takenAt), camera: pending.camera), at: 0)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
             do {
