@@ -42,6 +42,7 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
     private let ciContext: CIContext
     private let startTime = CACurrentMediaTime()
     private let spotter = CloudSpotter()
+    private let subjects = SubjectFinder()
     /// The rainbow as drawn: it glides toward what the spotter last saw, so it fades in and
     /// out and follows the cloud smoothly instead of jumping.
     private var rainbow = CloudLook.Rainbow()
@@ -85,6 +86,7 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         if let buffer = frames.latest() {
             source = CIImage(cvPixelBuffer: buffer)
             if mode == .cloud { spotter.look(at: buffer, now: time) }
+            if mode == .web { subjects.look(at: buffer, now: time) }
         } else if showsTestPattern {
             source = TestPattern.image(time: time)
         } else {
@@ -100,7 +102,7 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         switch mode {
         case .cloud: styled = CloudLook.apply(to: source, time: time, rainbow: updatedRainbow())
         case .pixel: styled = PixelLook.apply(to: source)
-        case .web: styled = WebLook.apply(to: source, time: time)
+        case .web: styled = WebLook.apply(to: source, time: time, subject: subjects.latest())
         }
         guard let target = nextBuffer(for: source.extent.size) else { return }
 

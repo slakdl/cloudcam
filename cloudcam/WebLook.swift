@@ -46,7 +46,7 @@ enum WebLook {
             return 0.5 * noise(p) + 0.3 * noise(p * 2.1 + 3.7) + 0.2 * noise(p * 4.3 + 8.1);
         }
 
-        kernel vec4 web(sampler soft, float size, float t, float px) {
+        kernel vec4 web(sampler soft, sampler subject, sampler halo, float size, float t, float px) {
             vec2 d = destCoord();
             float frame = floor(t * 12.0);  // grain and specks change 12 times a second
 
@@ -74,24 +74,40 @@ enum WebLook {
             // Frayed edges: the distance to each strand is jittered at two scales.
             float fray = (noise(d / 3.0 + frame) - 0.5) * 0.05 + (noise(d / 14.0) - 0.5) * 0.08;
 
-            // The main web grows only into the subject, swelling the darker it gets.
-            float coarse = wall(p, t) + fray;
-            float grow = smoothstep(0.38, 0.62, dark + (noise(d / 40.0) - 0.5) * 0.2);
-            float strand = mix(0.012, 0.22, smoothstep(0.5, 0.95, dark));
-            float ink = (1.0 - smoothstep(strand, strand + 0.035, coarse)) * grow;
+            // Where the subject is, after the same bending: m is its mask, softened a little,
+            // and reach is a wide glow around it that the tendrils grow through.
+            float m = sample(subject, samplerTransform(subject, at)).r;
+            float reach = sample(halo, samplerTransform(halo, at)).r;
+            float inside = smoothstep(0.35, 0.65, m + fray * 2.0);
 
-            // A finer, denser tangle in the darkest parts.
+            // The subject is built from the web. Contour strands wrap around its form, rippling
+            // slowly outward, thicker where it's darker.
+            float level = fract(l * 6.0 + reach * 2.5 + fray * 1.2 - t * 0.04);
+            float gap = min(level, 1.0 - level);
+            float wrap = 1.0 - smoothstep(mix(0.04, 0.17, dark), mix(0.04, 0.17, dark) + 0.04, gap);
+
+            // Between the strands, a net of organic cells.
+            float cells = wall(p, t) + fray;
+            float net = 1.0 - smoothstep(mix(0.02, 0.15, dark), mix(0.02, 0.15, dark) + 0.035, cells);
+
+            // Along the inside of the outline, a dense knotted tangle.
             float fine = wall(p * 3.1 + 7.0, t * 1.3) + fray * 0.7;
-            ink = max(ink, (1.0 - smoothstep(0.05, 0.12, fine)) * smoothstep(0.6, 0.9, dark));
+            float rim = 1.0 - smoothstep(0.6, 0.95, m);
+            float knot = (1.0 - smoothstep(0.05, 0.12, fine)) * rim;
 
-            // The scene's own outlines become heavy, smeared veins.
+            // The subject's own lines (its edges and details) become heavy veins.
             float edge = length(vec2(lx - l, ly - l)) + fray * 0.4;
-            ink = max(ink, smoothstep(0.05, 0.12, edge));
+            float vein = smoothstep(0.05, 0.12, edge);
 
-            // Thin wavering contours of brightness.
-            float level = fract(l * 7.0 + fray * 2.0);
-            float contour = 1.0 - smoothstep(0.0, 0.045, min(level, 1.0 - level) - 0.005);
-            ink = max(ink, contour * 0.85 * smoothstep(0.2, 0.45, dark));
+            float ink = inside * max(max(wrap, net), max(knot, vein));
+
+            // Its silhouette: a heavy, frayed black outline.
+            ink = max(ink, 1.0 - smoothstep(0.06, 0.16, abs(m + fray * 2.0 - 0.5)));
+
+            // Tendrils creeping out from the subject into the empty paper around it.
+            float creep = wall(p * 0.55 + 3.0, t * 0.7) + fray;
+            float tendril = (1.0 - smoothstep(0.012, 0.04, creep)) * smoothstep(0.04, 0.4, reach);
+            ink = max(ink, tendril * (1.0 - inside));
 
             // Patchy ink: thinner in some places, like a dry pen or a bad photocopy.
             ink *= 0.8 + 0.2 * smoothstep(0.35, 0.75, fbm(vec2(d.x / 60.0, d.y / 14.0) + 2.0));
@@ -118,7 +134,9 @@ enum WebLook {
         }
         """)
 
-    static func apply(to image: CIImage, time: Double) -> CIImage {
+    /// `subject` is a mask of the main thing in view (white on it), or nil to let the darker
+    /// parts of the scene stand in for it.
+    static func apply(to image: CIImage, time: Double, subject: CIImage? = nil) -> CIImage {
         let extent = image.extent
         let scale = extent.width / 1080  // keep the look the same at any resolution
         guard let kernel else { return image }
@@ -141,10 +159,38 @@ enum WebLook {
         shift.ev = Float(log2(0.5 / max(average, 0.04)))  // bring the average to mid-grey
         let soft = (shift.outputImage ?? image).clampedToExtent()
 
+        // The subject mask, fitted to the frame. With no subject found, the darker parts of the
+        // scene become the subject instead.
+        let rawMask: CIImage
+        if let subject, subject.extent.width > 0 {
+            rawMask = subject
+                .transformed(by: CGAffineTransform(translationX: -subject.extent.minX, y: -subject.extent.minY))
+                .transformed(by: CGAffineTransform(scaleX: extent.width / subject.extent.width,
+                                                   y: extent.height / subject.extent.height))
+                .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+        } else {
+            let invert = CIFilter.colorMatrix()
+            invert.inputImage = soft
+            let gain = CIVector(x: -0.299 * 4, y: -0.587 * 4, z: -0.114 * 4, w: 0)
+            invert.rVector = gain
+            invert.gVector = gain
+            invert.bVector = gain
+            invert.biasVector = CIVector(x: 2.5, y: 2.5, z: 2.5, w: 0)  // (0.625 - brightness) * 4
+            let clamp = CIFilter.colorClamp()
+            clamp.inputImage = invert.outputImage
+            rawMask = clamp.outputImage ?? soft
+        }
+        func blurred(_ radius: Double) -> CIImage {
+            let blur = CIFilter.gaussianBlur()
+            blur.inputImage = rawMask.clampedToExtent()
+            blur.radius = Float(radius * scale)
+            return (blur.outputImage ?? rawMask).clampedToExtent()
+        }
+
         return kernel.apply(
             extent: extent,
             roiCallback: { _, rect in rect.insetBy(dx: -100 * scale, dy: -60 * scale) },
-            arguments: [soft, Float(70 * scale), Float(time), Float(3 * scale)]
+            arguments: [soft, blurred(5), blurred(90), Float(70 * scale), Float(time), Float(3 * scale)]
         )?.cropped(to: extent) ?? image
     }
 
