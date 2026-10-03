@@ -1,103 +1,106 @@
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
-/// An everyday object turned into a low-poly 3D model, as if it were dropped into the real world
-/// from a video game. The main subject in view is rebuilt from flat triangles, each filled with one
-/// of its own colors and lit like a 3D surface, so it looks solid and slightly inflated. The mesh
-/// slowly ripples and warps, the object casts a shadow on the real scene behind it, and the real
-/// world keeps a little camera grain while the object stays perfectly clean, so it clearly doesn't
-/// belong there.
+/// An everyday object turned into a prop from an old N64 or PS1 game, sitting in the real world.
+/// The main subject in view is rebuilt as a chunky, inflated low-poly model: a coarse polygon
+/// outline, soft shading interpolated across each polygon with a big glossy plastic highlight,
+/// a blurry low-resolution texture made from its own colors, chunky pixels with 15-bit color
+/// and dithering, and a dark blob shadow underneath. The room around it stays a normal photo.
 enum WebLook {
     private static let kernel: CIKernel? = CIKernel(source: """
         float hash(vec2 p) {
             return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
         }
 
-        // A corner of the triangle mesh, in grid units. Every corner wanders on its own, and a
-        // slow wave runs through the whole mesh, so the shape warps and breathes.
+        // A corner of the polygon mesh, in grid units, bobbing very slightly.
         vec2 corner(vec2 c, float t) {
             float h = hash(c);
-            float k = hash(c + 17.3);
-            vec2 jitter = 0.3 * vec2(sin(t * 0.7 + 6.2832 * h), cos(t * 0.6 + 6.2832 * k));
-            vec2 wave = 0.22 * vec2(sin(c.y * 0.55 + t * 0.9), cos(c.x * 0.5 - t * 0.8));
-            return c + jitter + wave;
+            return c + 0.06 * vec2(sin(t * 0.8 + 6.2832 * h), cos(t * 0.7 + 6.2832 * h));
         }
 
-        // The smallest of the three barycentric weights of p in triangle abc: positive inside,
-        // negative outside, and close to zero near an edge.
-        float inside(vec2 p, vec2 a, vec2 b, vec2 c) {
+        // Barycentric weights of p in triangle abc (all positive when p is inside).
+        vec3 bary(vec2 p, vec2 a, vec2 b, vec2 c) {
             vec2 v0 = b - a;
             vec2 v1 = c - a;
             vec2 v2 = p - a;
             float den = v0.x * v1.y - v1.x * v0.y;
             float v = (v2.x * v1.y - v1.x * v2.y) / den;
             float w = (v0.x * v2.y - v2.x * v0.y) / den;
-            return min(min(1.0 - v - w, v), w);
+            return vec3(1.0 - v - w, v, w);
         }
 
-        kernel vec4 lowpoly(sampler src, sampler tone, sampler subject, sampler height, sampler shadow, sampler fill,
-                            float size, float t) {
-            vec2 d = destCoord();
+        // Which way the inflated model faces at one of its corners, from how its height slopes.
+        vec3 normalAt(sampler height, vec2 at, float reach) {
+            float h  = sample(height, samplerTransform(height, at)).r;
+            float hx = sample(height, samplerTransform(height, at + vec2(reach, 0.0))).r;
+            float hy = sample(height, samplerTransform(height, at + vec2(0.0, reach))).r;
+            return vec3((h - hx) * 5.0, (h - hy) * 5.0, 0.12);
+        }
+
+        kernel vec4 retro(sampler src, sampler texture, sampler subject, sampler height, sampler shadow,
+                          sampler fill, float size, float t, float pixel) {
+            vec2 real = destCoord();
+
+            // The model is drawn at a low resolution: chunky pixels.
+            vec2 d = (floor(real / pixel) + 0.5) * pixel;
             vec2 p = d / size;
             vec2 cell = floor(p);
 
-            // Find the triangle of the warped mesh that this pixel falls in: the one where it sits
-            // most comfortably inside. Each grid square is split into two triangles.
-            float best = -9.0;
-            vec2 A = vec2(0.0);
-            vec2 B = vec2(0.0);
-            vec2 C = vec2(0.0);
-            for (int y = -1; y <= 1; y++) {
-                for (int x = -1; x <= 1; x++) {
-                    vec2 c = cell + vec2(float(x), float(y));
-                    vec2 c00 = corner(c, t);
-                    vec2 c10 = corner(c + vec2(1.0, 0.0), t);
-                    vec2 c01 = corner(c + vec2(0.0, 1.0), t);
-                    vec2 c11 = corner(c + vec2(1.0, 1.0), t);
-                    float s1 = inside(p, c00, c10, c11);
-                    if (s1 > best) { best = s1; A = c00; B = c10; C = c11; }
-                    float s2 = inside(p, c00, c11, c01);
-                    if (s2 > best) { best = s2; A = c00; B = c11; C = c01; }
-                }
+            // Which polygon of the coarse mesh is this pixel in? Each grid square is two triangles.
+            vec2 A = corner(cell, t);
+            vec2 B = corner(cell + vec2(1.0, 0.0), t);
+            vec2 C = corner(cell + vec2(1.0, 1.0), t);
+            vec2 D = corner(cell + vec2(0.0, 1.0), t);
+            vec3 w = bary(p, A, B, C);
+            if (min(min(w.x, w.y), w.z) < 0.0) {
+                B = C;
+                C = D;
+                w = bary(p, A, B, C);
             }
 
-            // Does this facet belong to the object? Judge by its center, so the outline is made
-            // of whole triangles: a crisp, jagged polygon edge.
-            vec2 center = (A + B + C) / 3.0 * size;
-            float on = step(0.5, sample(subject, samplerTransform(subject, center)).r);
+            // The model's outline: how much each corner is on the subject, blended across the
+            // polygon and cut at the halfway point. That gives straight edges cutting across the
+            // polygons, the clean but angular outline of a low-detail game model.
+            float ma = sample(subject, samplerTransform(subject, A * size)).r;
+            float mb = sample(subject, samplerTransform(subject, B * size)).r;
+            float mc = sample(subject, samplerTransform(subject, C * size)).r;
+            float on = step(0.5, dot(w, vec3(ma, mb, mc)));
 
-            // The facet's one color: the object's average color around its center, a little more vivid.
-            vec3 base = sample(tone, samplerTransform(tone, center)).rgb;
-            float grey = dot(base, vec3(0.299, 0.587, 0.114));
-            base = clamp(mix(vec3(grey), base, 1.35), 0.0, 1.0);
+            // Blend the corners' directions across the polygon and light that: soft wrap-around
+            // light from the top left, a big glossy plastic highlight, darker toward the edges.
+            float reach = size * 0.35;
+            vec3 n = normalize(normalAt(height, A * size, reach) * w.x
+                             + normalAt(height, B * size, reach) * w.y
+                             + normalAt(height, C * size, reach) * w.z);
+            float h = sample(height, samplerTransform(height, d)).r;
+            vec3 l = normalize(vec3(-0.5, 0.65, 0.6));
+            float diffuse = max(0.2 + 0.8 * dot(n, l), 0.0) * mix(0.35, 1.0, smoothstep(0.45, 0.8, h));
+            float r = max(dot(reflect(-l, n), vec3(0.0, 0.0, 1.0)), 0.0);
+            float spec = 0.35 * pow(r, 5.0) + 0.8 * pow(r, 40.0);
 
-            // Light it like a 3D surface: treat the object as a rounded, inflated shape and work
-            // out which way this flat facet faces.
-            float lift = size * 2.4;
-            vec3 a3 = vec3(A * size, lift * sample(height, samplerTransform(height, A * size)).r);
-            vec3 b3 = vec3(B * size, lift * sample(height, samplerTransform(height, B * size)).r);
-            vec3 c3 = vec3(C * size, lift * sample(height, samplerTransform(height, C * size)).r);
-            vec3 n = normalize(cross(b3 - a3, c3 - a3));
-            if (n.z < 0.0) { n = -n; }
-            vec3 light = normalize(vec3(-0.45, 0.6, 0.75));
-            float diffuse = max(dot(n, light), 0.0);
-            float spec = pow(max(dot(reflect(-light, n), vec3(0.0, 0.0, 1.0)), 0.0), 18.0);
-            vec3 facet = base * (0.32 + 0.9 * diffuse) + vec3(0.3) * spec;
+            // A blurry, low-resolution texture of the object's own colors, punched up.
+            vec3 tex = sample(texture, samplerTransform(texture, d)).rgb;
+            float grey = dot(tex, vec3(0.299, 0.587, 0.114));
+            tex = clamp(mix(vec3(grey), tex, 1.5) * 1.1, 0.0, 1.0);
 
-            // Faint bright seams between facets, like an untextured 3D model.
-            facet = mix(facet * 1.18 + 0.03, facet, smoothstep(0.0, 0.035, best));
+            vec3 model = tex * (0.25 + 1.1 * diffuse) + vec3(spec);
 
-            // The real world: where the object used to be but no facet covers it now, a guess of
-            // what's behind it. A touch dimmer than real life, with a soft shadow from the object
-            // falling down and to the right, and fine camera grain.
-            float wasObject = step(0.5, sample(subject, samplerTransform(subject, d)).r);
-            vec3 room = mix(sample(src, samplerTransform(src, d)).rgb,
-                            sample(fill, samplerTransform(fill, d)).rgb, wasObject);
-            float shade = sample(shadow, samplerTransform(shadow, d + vec2(-0.7, 1.0) * size)).r;
-            room *= 0.9 * (1.0 - 0.7 * smoothstep(0.0, 0.7, shade));
-            room += (hash(d + floor(t * 24.0) * 13.1) - 0.5) * 0.04;
+            // 15-bit color with a little ordered dithering, like an old console's output.
+            float bayer = mod(floor(d.x / pixel), 2.0) * 0.5 + mod(floor(d.y / pixel), 2.0) * 0.25;
+            // Done in screen tones, so the steps are even and the darks don't crush.
+            model = pow(clamp(model, 0.0, 1.0), vec3(1.0 / 2.2));
+            model = floor(model * 31.0 + bayer) / 31.0;
+            model = pow(model, vec3(2.2));
 
-            return vec4(clamp(mix(room, facet, on), 0.0, 1.0), 1.0);
+            // The real world: where the object used to be but the model doesn't cover it, a guess
+            // of what's behind it. Under the model, a dark blob shadow on the ground.
+            float wasObject = step(0.5, sample(subject, samplerTransform(subject, real)).r);
+            vec3 room = mix(sample(src, samplerTransform(src, real)).rgb,
+                            sample(fill, samplerTransform(fill, real)).rgb, wasObject);
+            float blob = sample(shadow, samplerTransform(shadow, real + vec2(-0.25, 0.6) * size)).r;
+            room *= 1.0 - 0.6 * smoothstep(0.2, 0.6, blob);
+
+            return vec4(mix(room, model, on), 1.0);
         }
         """)
 
@@ -131,20 +134,49 @@ enum WebLook {
             mask = clamp.outputImage ?? source
         }
 
-        let facet = 40 * scale
+        // The object's colors as a tiny texture, smoothly stretched back up: blurry, like a
+        // low-resolution game texture.
+        let small = image
+            .transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+            .transformed(by: CGAffineTransform(scaleX: 1.0 / 18, y: 1.0 / 18))
+        let texture = small
+            .transformed(by: CGAffineTransform(scaleX: 18, y: 18))
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+            .clampedToExtent()
+
+        // A slightly softened outline, so the polygon corners agree on a simple shape.
+        let silhouette = blurred(mask, 10 * scale)
+
+        let polygon = 72 * scale
         return kernel.apply(
             extent: extent,
-            roiCallback: { _, rect in rect.insetBy(dx: -3 * facet, dy: -3 * facet) },
+            roiCallback: { _, rect in rect.insetBy(dx: -3 * polygon, dy: -3 * polygon) },
             arguments: [
                 source,
-                blurred(image, 9 * scale),   // each facet's color, averaged over its area
-                blurred(mask, 2 * scale),     // crisp, for deciding which facets belong
-                blurred(mask, 60 * scale),    // soft and rounded, the object's 3D bulge
-                blurred(mask, 22 * scale),    // the shadow it casts
+                texture,
+                silhouette,                         // which polygons belong to the model
+                dome(mask, scale: scale),                // the model's inflated, rounded shape
+                blurred(mask, 30 * scale),          // its blob shadow
                 behind(image, mask: mask, scale: scale),
-                Float(facet), Float(time),
+                Float(polygon), Float(time), Float(3 * scale),
             ]
         )?.cropped(to: extent) ?? image
+    }
+
+    /// The model's shape as a height map: rounded off at the edges like something inflated,
+    /// with a gentle swell across the whole thing.
+    private static func dome(_ mask: CIImage, scale: Double) -> CIImage {
+        let edges = blurred(mask, 35 * scale)
+        let swell = blurred(mask, 120 * scale)
+        let add = CIFilter.additionCompositing()
+        add.inputImage = edges
+        add.backgroundImage = swell
+        let half = CIFilter.colorMatrix()
+        half.inputImage = add.outputImage
+        half.rVector = CIVector(x: 0.5, y: 0, z: 0, w: 0)
+        half.gVector = CIVector(x: 0, y: 0.5, z: 0, w: 0)
+        half.bVector = CIVector(x: 0, y: 0, z: 0.5, w: 0)
+        return (half.outputImage ?? swell).clampedToExtent()
     }
 
     private static func blurred(_ image: CIImage, _ radius: Double) -> CIImage {
