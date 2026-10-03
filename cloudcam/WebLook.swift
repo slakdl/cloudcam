@@ -30,45 +30,91 @@ enum WebLook {
             return f2 - f1;
         }
 
-        kernel vec4 web(sampler soft, float size, float t, float step) {
+        // Smooth random hills, for bending, staining and fraying.
+        float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash(i);
+            float b = hash(i + vec2(1.0, 0.0));
+            float c = hash(i + vec2(0.0, 1.0));
+            float e = hash(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, e, f.x), f.y);
+        }
+
+        float fbm(vec2 p) {
+            return 0.5 * noise(p) + 0.3 * noise(p * 2.1 + 3.7) + 0.2 * noise(p * 4.3 + 8.1);
+        }
+
+        kernel vec4 web(sampler soft, float size, float t, float px) {
             vec2 d = destCoord();
+            float frame = floor(t * 12.0);  // grain and specks change 12 times a second
+
+            // Tearing: now and then a horizontal band slips sideways.
+            float band = floor(d.y / (size * 0.35));
+            float tear = hash(vec2(band, floor(t * 2.5)));
+            d.x += step(0.92, tear) * (hash(vec2(band, 7.0 + floor(t * 2.5))) - 0.5) * size * 0.9;
+
+            // Bending: a slow, twisting current pushes everything around, the picture too.
+            vec2 q = d / (size * 2.2);
+            vec2 bend = vec2(fbm(q + vec2(0.0, t * 0.06)), fbm(q + vec2(5.2, -t * 0.05))) - 0.5;
+            vec2 at = d + bend * size * 1.1;
+
             vec3 w = vec3(0.299, 0.587, 0.114);
-            float l  = dot(sample(soft, samplerTransform(soft, d)).rgb, w);
-            float lx = dot(sample(soft, samplerTransform(soft, d + vec2(step, 0.0))).rgb, w);
-            float ly = dot(sample(soft, samplerTransform(soft, d + vec2(0.0, step))).rgb, w);
+            float l  = dot(sample(soft, samplerTransform(soft, at)).rgb, w);
+            float lx = dot(sample(soft, samplerTransform(soft, at + vec2(px, 0.0))).rgb, w);
+            float ly = dot(sample(soft, samplerTransform(soft, at + vec2(0.0, px))).rgb, w);
             float dark = 1.0 - l;
 
-            // Bend space so the cells come out stretched and organic, not geometric.
-            // Leaning, stretched cells like a pulled net.
-            vec2 p = d / size;
+            // Leaning, stretched cells like a pulled net, warped by the same current.
+            vec2 p = at / size;
             p = vec2(0.8 * p.x + 0.35 * p.y, 0.55 * p.y);
-            p += 0.35 * vec2(sin(p.y * 1.7 + t * 0.2), cos(p.x * 1.5 - t * 0.17));
+            p += 0.9 * (vec2(fbm(p * 0.7 + t * 0.03), fbm(p * 0.7 + 9.1 - t * 0.03)) - 0.5);
 
-            // The main web grows only into the subject (the darker half of the scene), its
-            // strands swelling the darker it gets. Bright areas stay bare paper.
-            float coarse = wall(p, t);
-            float grow = smoothstep(0.4, 0.62, dark);
-            float strand = mix(0.012, 0.2, smoothstep(0.5, 0.95, dark));
-            float ink = (1.0 - smoothstep(strand, strand + 0.02, coarse)) * grow;
+            // Frayed edges: the distance to each strand is jittered at two scales.
+            float fray = (noise(d / 3.0 + frame) - 0.5) * 0.05 + (noise(d / 14.0) - 0.5) * 0.08;
 
-            // A finer, denser tangle that only grows into the dark parts.
-            float fine = wall(p * 3.1 + 7.0, t * 1.3);
-            float tangle = smoothstep(0.62, 0.9, dark);
-            ink = max(ink, (1.0 - smoothstep(0.06, 0.11, fine)) * tangle);
+            // The main web grows only into the subject, swelling the darker it gets.
+            float coarse = wall(p, t) + fray;
+            float grow = smoothstep(0.38, 0.62, dark + (noise(d / 40.0) - 0.5) * 0.2);
+            float strand = mix(0.012, 0.22, smoothstep(0.5, 0.95, dark));
+            float ink = (1.0 - smoothstep(strand, strand + 0.035, coarse)) * grow;
 
-            // The scene's own outlines become heavy veins.
-            float edge = length(vec2(lx - l, ly - l));
-            ink = max(ink, smoothstep(0.06, 0.12, edge));
+            // A finer, denser tangle in the darkest parts.
+            float fine = wall(p * 3.1 + 7.0, t * 1.3) + fray * 0.7;
+            ink = max(ink, (1.0 - smoothstep(0.05, 0.12, fine)) * smoothstep(0.6, 0.9, dark));
 
-            // Thin traced contours of brightness, the faint outlines between the strands.
-            float level = fract(l * 7.0);
-            float contour = 1.0 - smoothstep(0.0, 0.035, min(level, 1.0 - level) - 0.005);
-            ink = max(ink, contour * 0.9 * smoothstep(0.2, 0.45, dark));
+            // The scene's own outlines become heavy, smeared veins.
+            float edge = length(vec2(lx - l, ly - l)) + fray * 0.4;
+            ink = max(ink, smoothstep(0.05, 0.12, edge));
 
-            // Ink on slightly warm paper.
-            vec3 paper = vec3(0.96, 0.95, 0.93);
-            vec3 col = mix(paper, vec3(0.0), clamp(ink, 0.0, 1.0));
-            return vec4(col, 1.0);
+            // Thin wavering contours of brightness.
+            float level = fract(l * 7.0 + fray * 2.0);
+            float contour = 1.0 - smoothstep(0.0, 0.045, min(level, 1.0 - level) - 0.005);
+            ink = max(ink, contour * 0.85 * smoothstep(0.2, 0.45, dark));
+
+            // Patchy ink: thinner in some places, like a dry pen or a bad photocopy.
+            ink *= 0.8 + 0.2 * smoothstep(0.35, 0.75, fbm(vec2(d.x / 60.0, d.y / 14.0) + 2.0));
+            ink = clamp(ink, 0.0, 1.0);
+
+            // Stained, blotchy paper that darkens toward the corners.
+            vec2 uv = destCoord() / (size * vec2(15.4, 27.4));  // roughly 0..1 across the frame
+            float stain = fbm(d / (size * 3.0) + 11.0);
+            vec3 paper = vec3(0.93, 0.91, 0.86) * (0.84 + 0.2 * stain);
+            float corner = length(uv - 0.5);
+            paper *= 1.0 - smoothstep(0.35, 0.8, corner) * 0.55;
+
+            vec3 col = mix(paper, vec3(0.03, 0.02, 0.02), ink);
+
+            // Heavy grain, and stray specks of ink and dust.
+            float g = hash(d + frame * 13.1);
+            col += (g - 0.5) * 0.22;
+            float speck = hash(floor(d / 2.0) + frame * 7.3);
+            col = mix(col, vec3(0.02), step(0.9985, speck) * smoothstep(0.25, 0.5, dark));
+            col = mix(col, paper, step(0.996, speck) * ink * 0.8);
+            // All of the above was mixed in screen tones; convert to the linear light Core Image
+            // works in, so solid ink stays black instead of washing out to grey.
+            return vec4(pow(clamp(col, 0.0, 1.0), vec3(2.2)), 1.0);
         }
         """)
 
@@ -97,7 +143,7 @@ enum WebLook {
 
         return kernel.apply(
             extent: extent,
-            roiCallback: { _, rect in rect.insetBy(dx: -4 * scale - 2, dy: -4 * scale - 2) },
+            roiCallback: { _, rect in rect.insetBy(dx: -100 * scale, dy: -60 * scale) },
             arguments: [soft, Float(70 * scale), Float(time), Float(3 * scale)]
         )?.cropped(to: extent) ?? image
     }
