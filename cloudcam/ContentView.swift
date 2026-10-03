@@ -125,7 +125,10 @@ struct ContentView: View {
 
     private func takePhoto(publish: Bool) {
         // Save exactly what's on screen. Encode now, because the picture changes every frame.
-        guard let picture = renderer.snapshot(), let jpeg = PhotoSaver.jpeg(from: picture) else { return }
+        // In Web mode, also keep the raw camera frame: the saved photo gets the full game-asset
+        // treatment instead, which takes a moment.
+        guard let picture = renderer.snapshot(), let preview = PhotoSaver.jpeg(from: picture) else { return }
+        let raw = mode == .web ? camera.frames.latest() : nil
         if publish && Keychain.token == nil {
             showsSettings = true
             show("Add a GitHub token first, then publish")
@@ -140,6 +143,15 @@ struct ContentView: View {
         let camera = mode.rawValue
 
         Task {
+            var jpeg = preview
+            if let raw {
+                show("Turning it into a game object…")
+                if let asset = await Task.detached(priority: .userInitiated, operation: {
+                    GameAsset.make(from: raw).flatMap { PhotoSaver.jpeg(from: $0) }
+                }).value {
+                    jpeg = asset
+                }
+            }
             do {
                 try await PhotoSaver.save(jpeg)
                 show(publish ? "Saved, publishing…" : "Saved to Photos")
