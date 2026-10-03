@@ -1,11 +1,11 @@
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
-/// The world as a living tangle of black ink on white paper. A web of organic cells grows
-/// over the scene: its strands swell thick where the picture is dark and thin out where
-/// it's light, a second, finer web knots densely into the darkest places, the outlines of
-/// things become heavy veins, and thin traced contours wrap around everything. The cells
-/// drift slowly, so the web seems to breathe and grow.
+/// An everyday object, turned into something alive while it sits in the real world. The
+/// main subject in view is hollowed out into a lattice of glossy, sinewy strands made of its own
+/// colors, and those strands don't stop at its outline: they bleed out and creep into the room
+/// as tendrils. The space around it bends toward it and darkens, as if it pulls in the light.
+/// The cells drift slowly, so it seems to breathe and grow.
 enum WebLook {
     private static let kernel: CIKernel? = CIKernel(source: """
         float hash(vec2 p) {
@@ -46,91 +46,90 @@ enum WebLook {
             return 0.5 * noise(p) + 0.3 * noise(p * 2.1 + 3.7) + 0.2 * noise(p * 4.3 + 8.1);
         }
 
-        kernel vec4 web(sampler soft, sampler subject, sampler halo, float size, float t, float px) {
+        kernel vec4 web(sampler src, sampler soft, sampler subject, sampler halo, sampler fill,
+                        sampler aura, float size, float t, float px) {
             vec2 d = destCoord();
-            float frame = floor(t * 12.0);  // grain and specks change 12 times a second
+            vec3 w = vec3(0.299, 0.587, 0.114);
+            float frame = floor(t * 24.0);
 
-            // Tearing: now and then a horizontal band slips sideways.
-            float band = floor(d.y / (size * 0.35));
-            float tear = hash(vec2(band, floor(t * 2.5)));
-            d.x += step(0.92, tear) * (hash(vec2(band, 7.0 + floor(t * 2.5))) - 0.5) * size * 0.9;
+            // How close we are to the subject: 1 on it, fading out over the room around it.
+            float reach = sample(halo, samplerTransform(halo, d)).r;
+            float hx = sample(halo, samplerTransform(halo, d + vec2(px * 6.0, 0.0))).r;
+            float hy = sample(halo, samplerTransform(halo, d + vec2(0.0, px * 6.0))).r;
+            vec2 toward = vec2(hx - reach, hy - reach);  // points toward the subject
+            toward = toward / max(length(toward), 0.0001);
 
-            // Bending: a slow, twisting current pushes everything around, the picture too.
+            // The world bends only near the subject, twisting harder the closer it gets.
             vec2 q = d / (size * 2.2);
             vec2 bend = vec2(fbm(q + vec2(0.0, t * 0.06)), fbm(q + vec2(5.2, -t * 0.05))) - 0.5;
-            vec2 at = d + bend * size * 1.1;
+            float pull = smoothstep(0.02, 0.6, reach);
+            vec2 at = d + bend * size * 1.3 * pull;
 
-            vec3 w = vec3(0.299, 0.587, 0.114);
+            float m = sample(subject, samplerTransform(subject, at)).r;
             float l  = dot(sample(soft, samplerTransform(soft, at)).rgb, w);
             float lx = dot(sample(soft, samplerTransform(soft, at + vec2(px, 0.0))).rgb, w);
             float ly = dot(sample(soft, samplerTransform(soft, at + vec2(0.0, px))).rgb, w);
             float dark = 1.0 - l;
+            float fray = (noise(d / 3.0 + frame) - 0.5) * 0.04 + (noise(d / 14.0) - 0.5) * 0.07;
+            float inside = smoothstep(0.3, 0.7, m + fray * 2.0);
 
-            // Leaning, stretched cells like a pulled net, warped by the same current.
+            // Leaning, stretched cells, warped by the same current.
             vec2 p = at / size;
             p = vec2(0.8 * p.x + 0.35 * p.y, 0.55 * p.y);
             p += 0.9 * (vec2(fbm(p * 0.7 + t * 0.03), fbm(p * 0.7 + 9.1 - t * 0.03)) - 0.5);
 
-            // Frayed edges: the distance to each strand is jittered at two scales.
-            float fray = (noise(d / 3.0 + frame) - 0.5) * 0.05 + (noise(d / 14.0) - 0.5) * 0.08;
-
-            // Where the subject is, after the same bending: m is its mask, softened a little,
-            // and reach is a wide glow around it that the tendrils grow through.
-            float m = sample(subject, samplerTransform(subject, at)).r;
-            float reach = sample(halo, samplerTransform(halo, at)).r;
-            float inside = smoothstep(0.35, 0.65, m + fray * 2.0);
-
-            // The subject is built from the web. Contour strands wrap around its form, rippling
-            // slowly outward, thicker where it's darker.
+            // Each strand as a profile: 1 along its spine, falling to 0 at its edge, so it can
+            // be shaded like something round and physical.
+            float cellsW = mix(0.08, 0.2, dark);
+            float cells = clamp(1.0 - (wall(p, t) + fray) / cellsW, 0.0, 1.0);
             float level = fract(l * 6.0 + reach * 2.5 + fray * 1.2 - t * 0.04);
-            float gap = min(level, 1.0 - level);
-            float wrap = 1.0 - smoothstep(mix(0.04, 0.17, dark), mix(0.04, 0.17, dark) + 0.04, gap);
+            float wrapW = mix(0.06, 0.16, dark);
+            float wrap = clamp(1.0 - min(level, 1.0 - level) / wrapW, 0.0, 1.0);
+            float knot = clamp(1.0 - (wall(p * 3.1 + 7.0, t * 1.3) + fray) / 0.09, 0.0, 1.0)
+                       * (1.0 - smoothstep(0.6, 0.95, m));
+            float rim = clamp(1.0 - abs(m + fray * 2.0 - 0.5) / 0.16, 0.0, 1.0);
+            float body = inside * max(max(cells, wrap), knot);
+            body = max(body, rim);
 
-            // Between the strands, a net of organic cells.
-            float cells = wall(p, t) + fray;
-            float net = 1.0 - smoothstep(mix(0.02, 0.15, dark), mix(0.02, 0.15, dark) + 0.035, cells);
+            // Tendrils extruding from the subject into the room, thinning as they reach out.
+            float tw = mix(0.0, 0.2, smoothstep(0.02, 0.65, reach));
+            float tendril = clamp(1.0 - (wall(p * 0.5 + 3.0, t * 0.7) + fray) / max(tw, 0.0001), 0.0, 1.0);
+            tendril *= step(0.0001, tw) * (1.0 - inside);
+            float strand = max(body, tendril);
+            float cover = smoothstep(0.0, 0.22, strand);
 
-            // Along the inside of the outline, a dense knotted tangle.
-            float fine = wall(p * 3.1 + 7.0, t * 1.3) + fray * 0.7;
-            float rim = 1.0 - smoothstep(0.6, 0.95, m);
-            float knot = (1.0 - smoothstep(0.05, 0.12, fine)) * rim;
+            // What the strands are made of: the subject's own colors, dragged outward along the
+            // tendrils, darkened and made glossy, like wet sinew.
+            // On the subject that's its own color right there; out in the room it's the subject's
+            // colors spread outward (the aura), so the tendrils carry its flesh with them.
+            vec3 own = sample(src, samplerTransform(src, at)).rgb;
+            vec3 spread = sample(aura, samplerTransform(aura, d)).rgb;
+            vec3 flesh = mix(spread, own, inside);
+            float shade = sqrt(strand);
+            float shine = pow(strand, 10.0);
+            vec3 material = flesh * mix(0.12 + 0.45 * shade, 0.18 + 0.6 * shade, inside) * mix(vec3(0.75, 0.55, 0.5), vec3(1.0), inside)
+                           + vec3(0.85, 0.82, 0.8) * shine * 0.35;
 
-            // The subject's own lines (its edges and details) become heavy veins.
-            float edge = length(vec2(lx - l, ly - l)) + fray * 0.4;
-            float vein = smoothstep(0.05, 0.12, edge);
+            // Behind the strands: outside, the real room (bent near the subject); inside, the
+            // hollowed object, showing a guess of what's behind it, stained with its own color.
+            vec3 room = sample(src, samplerTransform(src, at)).rgb;
+            vec3 behind = sample(fill, samplerTransform(fill, d)).rgb;
+            vec3 cavity = mix(behind, flesh * 0.35, 0.4);
+            vec3 base = mix(room, cavity, inside);
 
-            float ink = inside * max(max(wrap, net), max(knot, vein));
+            // The room darkens around the subject, as if it casts a shadow and soaks up light.
+            base *= 1.0 - 0.6 * smoothstep(0.02, 0.6, reach) * (1.0 - inside);
 
-            // Its silhouette: a heavy, frayed black outline.
-            ink = max(ink, 1.0 - smoothstep(0.06, 0.16, abs(m + fray * 2.0 - 0.5)));
+            // Tendrils cast a soft shadow onto the room beside them, so they sit on its surfaces.
+            float shadowSide = clamp(1.0 - (wall(p * 0.5 + 3.0 + vec2(0.035, -0.05), t * 0.7) + fray)
+                                     / max(tw * 1.6, 0.0001), 0.0, 1.0) * step(0.0001, tw) * (1.0 - inside);
+            base *= 1.0 - 0.5 * smoothstep(0.0, 0.5, shadowSide);
 
-            // Tendrils creeping out from the subject into the empty paper around it.
-            float creep = wall(p * 0.55 + 3.0, t * 0.7) + fray;
-            float tendril = (1.0 - smoothstep(0.012, 0.04, creep)) * smoothstep(0.04, 0.4, reach);
-            ink = max(ink, tendril * (1.0 - inside));
+            vec3 col = mix(base, material, cover);
 
-            // Patchy ink: thinner in some places, like a dry pen or a bad photocopy.
-            ink *= 0.8 + 0.2 * smoothstep(0.35, 0.75, fbm(vec2(d.x / 60.0, d.y / 14.0) + 2.0));
-            ink = clamp(ink, 0.0, 1.0);
-
-            // Stained, blotchy paper that darkens toward the corners.
-            vec2 uv = destCoord() / (size * vec2(15.4, 27.4));  // roughly 0..1 across the frame
-            float stain = fbm(d / (size * 3.0) + 11.0);
-            vec3 paper = vec3(0.93, 0.91, 0.86) * (0.84 + 0.2 * stain);
-            float corner = length(uv - 0.5);
-            paper *= 1.0 - smoothstep(0.35, 0.8, corner) * 0.55;
-
-            vec3 col = mix(paper, vec3(0.03, 0.02, 0.02), ink);
-
-            // Heavy grain, and stray specks of ink and dust.
-            float g = hash(d + frame * 13.1);
-            col += (g - 0.5) * 0.22;
-            float speck = hash(floor(d / 2.0) + frame * 7.3);
-            col = mix(col, vec3(0.02), step(0.9985, speck) * smoothstep(0.25, 0.5, dark));
-            col = mix(col, paper, step(0.996, speck) * ink * 0.8);
-            // All of the above was mixed in screen tones; convert to the linear light Core Image
-            // works in, so solid ink stays black instead of washing out to grey.
-            return vec4(pow(clamp(col, 0.0, 1.0), vec3(2.2)), 1.0);
+            // A light camera grain over everything, so it all sits in one photo.
+            col += (hash(d + frame * 13.1) - 0.5) * 0.035;
+            return vec4(clamp(col, 0.0, 1.0), 1.0);
         }
         """)
 
@@ -140,11 +139,12 @@ enum WebLook {
         let extent = image.extent
         let scale = extent.width / 1080  // keep the look the same at any resolution
         guard let kernel else { return image }
+        let source = image.clampedToExtent()
 
-        // Soften and even out the picture first, so the web follows shapes, not every speck,
-        // and a dim room spreads across the same range of thick-to-thin as a bright day.
+        // A softened, evened-out copy for reading the subject's light and dark, so a dim room
+        // spreads across the same range of thick-to-thin strands as a bright day.
         let soften = CIFilter.gaussianBlur()
-        soften.inputImage = image.clampedToExtent()
+        soften.inputImage = source
         soften.radius = Float(6 * scale)
         let balance = CIFilter.colorControls()
         balance.inputImage = soften.outputImage
@@ -156,11 +156,11 @@ enum WebLook {
         let average = mean.outputImage.flatMap { averageBrightness(of: $0) } ?? 0.5
         let shift = CIFilter.exposureAdjust()
         shift.inputImage = balance.outputImage
-        shift.ev = Float(log2(0.5 / max(average, 0.04)))  // bring the average to mid-grey
+        shift.ev = Float(log2(0.5 / max(average, 0.04)))
         let soft = (shift.outputImage ?? image).clampedToExtent()
 
         // The subject mask, fitted to the frame. With no subject found, the darker parts of the
-        // scene become the subject instead.
+        // scene stand in for it.
         let rawMask: CIImage
         if let subject, subject.extent.width > 0 {
             rawMask = subject
@@ -180,18 +180,64 @@ enum WebLook {
             clamp.inputImage = invert.outputImage
             rawMask = clamp.outputImage ?? soft
         }
-        func blurred(_ radius: Double) -> CIImage {
+        func blurred(_ image: CIImage, _ radius: Double) -> CIImage {
             let blur = CIFilter.gaussianBlur()
-            blur.inputImage = rawMask.clampedToExtent()
+            blur.inputImage = image.clampedToExtent()
             blur.radius = Float(radius * scale)
-            return (blur.outputImage ?? rawMask).clampedToExtent()
+            return (blur.outputImage ?? image).clampedToExtent()
         }
 
         return kernel.apply(
             extent: extent,
-            roiCallback: { _, rect in rect.insetBy(dx: -100 * scale, dy: -60 * scale) },
-            arguments: [soft, blurred(5), blurred(90), Float(70 * scale), Float(time), Float(3 * scale)]
+            roiCallback: { _, rect in rect.insetBy(dx: -200 * scale, dy: -200 * scale) },
+            arguments: [source, soft, blurred(rawMask, 5), blurred(rawMask, 150), behind(image, mask: rawMask, scale: scale),
+                        aura(image, mask: rawMask, scale: scale),
+                        Float(70 * scale), Float(time), Float(3 * scale)]
         )?.cropped(to: extent) ?? image
+    }
+
+    /// A rough guess of what's behind the subject: the surroundings smeared inward to fill the
+    /// hole where it stands.
+    private static func behind(_ image: CIImage, mask: CIImage, scale: Double) -> CIImage {
+        let keep = CIFilter.colorInvert()  // 1 where the surroundings are, 0 on the subject
+        keep.inputImage = mask
+        return spreadOut(image, from: keep.outputImage ?? mask, radius: 40 * scale)
+    }
+
+    /// The subject's colors spread outward into the room, for the tendrils to carry.
+    private static func aura(_ image: CIImage, mask: CIImage, scale: Double) -> CIImage {
+        spreadOut(image, from: mask, radius: 70 * scale)
+    }
+
+    /// Smears the parts of `image` where `weight` is white over everything else: blur the
+    /// picture with the rest cut out, then divide by how much of the blur came from the kept
+    /// part. Made at quarter size, since it's blurry anyway.
+    private static func spreadOut(_ image: CIImage, from weight: CIImage, radius: Double) -> CIImage {
+        let extent = image.extent
+        let small = CGAffineTransform(translationX: -extent.minX, y: -extent.minY)
+            .concatenating(CGAffineTransform(scaleX: 0.25, y: 0.25))
+        let picture = image.transformed(by: small)
+        let bounds = picture.extent
+        let kept = weight.transformed(by: small).cropped(to: bounds)
+
+        let cut = CIFilter.multiplyCompositing()
+        cut.inputImage = picture
+        cut.backgroundImage = kept
+
+        func blur(_ image: CIImage?) -> CIImage {
+            let blur = CIFilter.gaussianBlur()
+            blur.inputImage = image?.cropped(to: bounds).clampedToExtent()
+            blur.radius = Float(radius)
+            return (blur.outputImage ?? picture).cropped(to: bounds)
+        }
+        let floor = CIImage(color: CIColor(red: 0.02, green: 0.02, blue: 0.02)).cropped(to: bounds)
+        let divide = CIFilter.divideBlendMode()
+        divide.inputImage = blur(kept).applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: floor])
+        divide.backgroundImage = blur(cut.outputImage)
+
+        return (divide.outputImage ?? picture)
+            .transformed(by: small.inverted())
+            .clampedToExtent()
     }
 
     private static let context = CIContext(options: [.workingColorSpace: NSNull()])
