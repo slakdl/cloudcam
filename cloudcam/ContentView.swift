@@ -61,6 +61,7 @@ struct ContentView: View {
             try? await Publisher.shared.sendWaiting()  // anything left over from last time
         }
         .task { await use(mode) }
+        .onAppear { room.onMessage = { show($0) } }
         // Only one of them can have the camera at a time: ARKit for Poly, our own feed otherwise.
         .onChange(of: mode) { old, new in
             guard (old == .poly) != (new == .poly) else { return }

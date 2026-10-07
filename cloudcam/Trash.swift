@@ -175,7 +175,7 @@ enum Trash {
             """,
     ]
 
-    private static func material(color: CGColor, shiny: Bool) -> SCNMaterial {
+    static func material(color: CGColor, shiny: Bool) -> SCNMaterial {
         let m = SCNMaterial()
         m.lightingModel = shiny ? .blinn : .lambert
         m.diffuse.contents = color
@@ -188,7 +188,7 @@ enum Trash {
         return m
     }
 
-    private static func material(texture: CGImage?) -> SCNMaterial {
+    static func material(texture: CGImage?) -> SCNMaterial {
         let m = SCNMaterial()
         m.lightingModel = .lambert
         m.diffuse.contents = texture
@@ -206,7 +206,7 @@ enum Trash {
         (0.95, 0.45, 0.1), (0.6, 0.2, 0.75), (0.95, 0.4, 0.65), (0.1, 0.1, 0.12),
     ]
 
-    private static func pixels(_ width: Int, _ height: Int, draw: (CGContext) -> Void) -> CGImage? {
+    static func pixels(_ width: Int, _ height: Int, draw: (CGContext) -> Void) -> CGImage? {
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
@@ -215,7 +215,7 @@ enum Trash {
         return context.makeImage()
     }
 
-    private static func fill(_ c: CGContext, _ color: (CGFloat, CGFloat, CGFloat), _ rect: CGRect) {
+    static func fill(_ c: CGContext, _ color: (CGFloat, CGFloat, CGFloat), _ rect: CGRect) {
         c.setFillColor(red: color.0, green: color.1, blue: color.2, alpha: 1)
         c.fill(rect)
     }
