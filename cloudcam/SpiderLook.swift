@@ -3,9 +3,8 @@ import CoreImage
 import QuartzCore
 
 /// The spider from the nielsthejls.com navigation, sitting on whatever the camera is pointed at.
-/// Its body sits on the middle of the subject, and each of its eight legs reaches out at the
-/// same hip angles as on the site until it meets the subject's outline, where it plants its
-/// foot. Each leg is two thin strings (body to knee, knee to foot) with a random shape at the
+/// Its body sits on the middle of the subject, and its eight feet are spread evenly round the
+/// subject's outline, each gripping its own spot. Each leg is two thin strings (body to knee, knee to foot) with a random shape at the
 /// knee and at the foot, drawn so they invert whatever is under them, like the nav over images.
 /// The body is the orange accent. Legs are springy, with the same spring as the site, so they
 /// pop out and scramble after the subject as it moves.
@@ -23,7 +22,6 @@ final class SpiderLook {
 
     private struct Leg {
         var angle: Double  // radians from the heading, negative on the left
-        var front: Bool
         var knee = Shape.allCases.randomElement()!
         var foot = Shape.allCases.randomElement()!
         var position = CGPoint.zero
@@ -51,8 +49,8 @@ final class SpiderLook {
 
     init() {
         legs = [-1.0, 1.0].flatMap { side in
-            Self.hipAngles.enumerated().map { index, degrees in
-                Leg(angle: side * degrees * .pi / 180, front: index < 2)
+            Self.hipAngles.map { degrees in
+                Leg(angle: side * degrees * .pi / 180)
             }
         }
     }
@@ -112,8 +110,7 @@ final class SpiderLook {
         return CGPoint(x: p.x + v.dx, y: p.y + v.dy)
     }
 
-    /// Two-segment leg from the body to the foot. Front knees point forward (up), back knees
-    /// backward, mirrored left and right like a spider's spread.
+    /// Two-segment leg from the body to the foot.
     private func knee(of leg: Leg) -> CGPoint {
         let dx = leg.position.x - body.x, dy = leg.position.y - body.y
         let d = max(hypot(dx, dy), 1)
@@ -123,8 +120,9 @@ final class SpiderLook {
         let base = atan2(dy, dx)
         let k1 = CGPoint(x: body.x + cos(base + a) * upper, y: body.y + sin(base + a) * upper)
         let k2 = CGPoint(x: body.x + cos(base - a) * upper, y: body.y + sin(base - a) * upper)
-        // The heading is straight up the frame.
-        return (k1.y > k2.y) == leg.front ? k1 : k2
+        // Knees bend outward, to the leg's own side, so the legs arch like a spider's.
+        let side: CGFloat = leg.angle < 0 ? -1 : 1
+        return (k1.x - body.x) * side > (k2.x - body.x) * side ? k1 : k2
     }
 
     // MARK: - Drawing
@@ -240,16 +238,36 @@ final class SpiderLook {
         guard count > 20 else { return nil }
         let cx = sumX / count, cy = sumY / count
 
-        // March out from the middle at each leg's angle (measured from straight up) until we
-        // leave the subject. In pixel units, so the angles look right on the tall frame.
-        let feet = angles.map { angle -> CGPoint in
-            let a = .pi / 2 - angle
-            let dx = cos(a), dy = sin(a)
-            var x = cx, y = cy
-            while inside(x + dx * 0.5, y + dy * 0.5) {
-                x += dx * 0.5; y += dy * 0.5
+        // Every point on the subject's outline, ordered around the middle, starting straight
+        // below it and going round through the left, the top and the right.
+        var edge: [(angle: Double, x: Double, y: Double)] = []
+        for row in 0..<height {
+            for col in 0..<width where on(col, row) {
+                let outside = !inside(Double(col - 1), Double(row)) || !inside(Double(col + 1), Double(row))
+                    || !inside(Double(col), Double(row - 1)) || !inside(Double(col), Double(row + 1))
+                guard outside else { continue }
+                let x = Double(col) + 0.5, y = Double(row) + 0.5
+                edge.append((atan2(x - cx, y - cy), x, y))  // 0 is straight up, positive to the right
             }
-            return CGPoint(x: x / Double(width), y: y / Double(height))
+        }
+        edge.sort { $0.angle < $1.angle }
+        guard edge.count >= angles.count else { return nil }
+
+        // Walk round the outline and drop the feet at even distances along it, so every leg
+        // grips its own spot and the spider spreads over the whole shape. Legs are handed out
+        // in the same order round the body, so none cross.
+        var along = [0.0]
+        for i in 1..<edge.count {
+            along.append(along[i - 1] + hypot(edge[i].x - edge[i - 1].x, edge[i].y - edge[i - 1].y))
+        }
+        let total = along.last! + hypot(edge[0].x - edge.last!.x, edge[0].y - edge.last!.y)
+        let order = angles.indices.sorted { angles[$0] < angles[$1] }
+        var feet = [CGPoint](repeating: .zero, count: angles.count)
+        var j = 0
+        for (rank, leg) in order.enumerated() {
+            let goal = total * (Double(rank) + 0.5) / Double(angles.count)
+            while j < along.count - 1 && along[j] < goal { j += 1 }
+            feet[leg] = CGPoint(x: edge[j].x / Double(width), y: edge[j].y / Double(height))
         }
         return Anchors(body: CGPoint(x: cx / Double(width), y: cy / Double(height)), feet: feet)
     }

@@ -24,7 +24,7 @@ actor Publisher {
     private struct Pending: Codable {
         var name: String  // e.g. 2026-10-03-091512.jpg
         var takenAt: Date
-        var camera: String?  // which look took it, e.g. "Cloud"
+        var camera: String?  // which look took it, e.g. "Spider"
     }
 
     /// An entry in `photos.json`.

@@ -4,7 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var camera: CameraService
     @State private var renderer: CameraRenderer
-    @AppStorage("mode") private var mode: CloudLook.Mode = .cloud
+    @AppStorage("mode") private var mode: CloudLook.Mode = .spider
     @State private var isSaving = false
     @State private var flash = false
     @State private var message: String?

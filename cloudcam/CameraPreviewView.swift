@@ -34,7 +34,7 @@ struct CameraPreviewView: UIViewRepresentable {
 /// That buffer is what gets saved when you take a photo.
 final class CameraRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
-    var mode: CloudLook.Mode = .cloud
+    var mode: CloudLook.Mode = .spider
     var showsTestPattern = false
 
     private let frames: FrameStore
@@ -85,7 +85,7 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         // 1. Apply the look and draw the result into an off-screen buffer.
         let styled: CIImage
         switch mode {
-        case .cloud: styled = spider.apply(to: source, subject: subjects.latest(), time: time)
+        case .spider: styled = spider.apply(to: source, subject: subjects.latest(), time: time)
         case .pixel: styled = PixelLook.apply(to: source)
         case .web: styled = WebLook.apply(to: source, time: time, subject: subjects.latest())
         }
