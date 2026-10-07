@@ -71,7 +71,7 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         let source: CIImage
         if let buffer = frames.latest() {
             source = CIImage(cvPixelBuffer: buffer)
-            if mode != .pixel { subjects.look(at: buffer, now: time) }
+            if mode == .spider { subjects.look(at: buffer, now: time) }
         } else if showsTestPattern {
             source = TestPattern.image(time: time)
         } else {
@@ -87,7 +87,7 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         switch mode {
         case .spider: styled = spider.apply(to: source, subject: subjects.latest(), time: time)
         case .pixel: styled = PixelLook.apply(to: source)
-        case .web: styled = WebLook.apply(to: source, time: time, subject: subjects.latest())
+        case .poly: styled = source  // Poly mode shows the AR view instead of this one
         }
         guard let target = nextBuffer(for: source.extent.size) else { return }
 

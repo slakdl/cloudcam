@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var flash = false
     @State private var message: String?
     @State private var showsSettings = false
+    @State private var room = PolyRoom()
 
     init() {
         let camera = CameraService()
@@ -22,12 +23,16 @@ struct ContentView: View {
             // below stay clear of the notch and the home bar.
             Color.black.ignoresSafeArea()
 
-            CameraPreviewView(
-                renderer: renderer,
-                mode: mode,
-                showsTestPattern: camera.status == .unavailable
-            )
-            .ignoresSafeArea()
+            if mode == .poly {
+                PolyView(room: room).ignoresSafeArea()
+            } else {
+                CameraPreviewView(
+                    renderer: renderer,
+                    mode: mode,
+                    showsTestPattern: camera.status == .unavailable
+                )
+                .ignoresSafeArea()
+            }
 
             // A quick white blink when the picture is taken.
             Color.white
@@ -55,8 +60,26 @@ struct ContentView: View {
         .task {
             try? await Publisher.shared.sendWaiting()  // anything left over from last time
         }
-        .task { await camera.start() }
-        .onDisappear { camera.stop() }
+        .task { await use(mode) }
+        // Only one of them can have the camera at a time: ARKit for Poly, our own feed otherwise.
+        .onChange(of: mode) { old, new in
+            guard (old == .poly) != (new == .poly) else { return }
+            Task { await use(new) }
+        }
+        .onDisappear {
+            camera.stop()
+            room.stop()
+        }
+    }
+
+    private func use(_ mode: CloudLook.Mode) async {
+        if mode == .poly {
+            camera.stop()
+            room.start()
+        } else {
+            room.stop()
+            await camera.start()
+        }
     }
 
     private func banner(_ text: String) -> some View {
@@ -125,10 +148,10 @@ struct ContentView: View {
 
     private func takePhoto(publish: Bool) {
         // Save exactly what's on screen. Encode now, because the picture changes every frame.
-        // In Web mode, also keep the raw camera frame: the saved photo gets the full game-asset
-        // treatment instead, which takes a moment.
-        guard let picture = renderer.snapshot(), let preview = PhotoSaver.jpeg(from: picture) else { return }
-        let raw = mode == .web ? camera.frames.latest() : nil
+        let preview = mode == .poly
+            ? room.snapshot().jpegData(compressionQuality: 0.92)
+            : renderer.snapshot().flatMap(PhotoSaver.jpeg)
+        guard let preview else { return }
         if publish && Keychain.token == nil {
             showsSettings = true
             show("Add a GitHub token first, then publish")
@@ -143,15 +166,7 @@ struct ContentView: View {
         let camera = mode.rawValue
 
         Task {
-            var jpeg = preview
-            if let raw {
-                show("Turning it into a game object…")
-                if let asset = await Task.detached(priority: .userInitiated, operation: {
-                    GameAsset.make(from: raw).flatMap { PhotoSaver.jpeg(from: $0) }
-                }).value {
-                    jpeg = asset
-                }
-            }
+            let jpeg = preview
             do {
                 try await PhotoSaver.save(jpeg)
                 show(publish ? "Saved, publishing…" : "Saved to Photos")
