@@ -41,11 +41,8 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
     private let commandQueue: MTLCommandQueue
     private let ciContext: CIContext
     private let startTime = CACurrentMediaTime()
-    private let spotter = CloudSpotter()
     private let subjects = SubjectFinder()
-    /// The rainbow as drawn: it glides toward what the spotter last saw, so it fades in and
-    /// out and follows the cloud smoothly instead of jumping.
-    private var rainbow = CloudLook.Rainbow()
+    private let spider = SpiderLook()
     private var buffers: [CVPixelBuffer] = []
     private var latest: CVPixelBuffer?
 
@@ -61,17 +58,6 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
-    private func updatedRainbow() -> CloudLook.Rainbow {
-        let seen = spotter.latest()
-        rainbow.strength += ((seen.cloudy ? 1 : 0) - rainbow.strength) * 0.04
-        if seen.cloudy {
-            rainbow.center.x += (seen.position.x - rainbow.center.x) * 0.08
-            rainbow.center.y += (seen.position.y - rainbow.center.y) * 0.08
-            rainbow.size += (seen.size - rainbow.size) * 0.08
-        }
-        return rainbow
-    }
-
     /// The last picture that was shown, exactly as it looked. Only valid until the next frame is drawn.
     func snapshot() -> CIImage? {
         latest.map { CIImage(cvPixelBuffer: $0) }
@@ -85,8 +71,7 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         let source: CIImage
         if let buffer = frames.latest() {
             source = CIImage(cvPixelBuffer: buffer)
-            if mode == .cloud { spotter.look(at: buffer, now: time) }
-            if mode == .web { subjects.look(at: buffer, now: time) }
+            if mode != .pixel { subjects.look(at: buffer, now: time) }
         } else if showsTestPattern {
             source = TestPattern.image(time: time)
         } else {
@@ -100,7 +85,7 @@ final class CameraRenderer: NSObject, MTKViewDelegate {
         // 1. Apply the look and draw the result into an off-screen buffer.
         let styled: CIImage
         switch mode {
-        case .cloud: styled = CloudLook.apply(to: source, time: time, rainbow: updatedRainbow())
+        case .cloud: styled = spider.apply(to: source, subject: subjects.latest(), time: time)
         case .pixel: styled = PixelLook.apply(to: source)
         case .web: styled = WebLook.apply(to: source, time: time, subject: subjects.latest())
         }
