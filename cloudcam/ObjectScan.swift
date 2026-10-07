@@ -12,6 +12,7 @@ enum ObjectScan {
         var box: CGRect  // the object in the upright picture, 0...1 from the bottom left
         var color: CGColor
         var picture: CGImage?  // a tiny pixelated picture of it, for objects without a model
+        var standsOut: Bool  // whether a separate object was actually found there
     }
 
     private static let context = CIContext()
@@ -27,8 +28,8 @@ enum ObjectScan {
                           y: 1 - (point.y - (viewSize.height - shown.height) / 2) / shown.height)
 
         let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .right)
-        let box = objectBox(at: tap, handler: handler)
-            ?? CGRect(x: tap.x - 0.18, y: tap.y - 0.12, width: 0.36, height: 0.24)
+        let found = objectBox(at: tap, handler: handler)
+        let box = found ?? CGRect(x: tap.x - 0.18, y: tap.y - 0.12, width: 0.36, height: 0.24)
 
         let classify = VNClassifyImageRequest()
         classify.regionOfInterest = box.insetBy(dx: -0.03, dy: -0.03).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
@@ -38,7 +39,8 @@ enum ObjectScan {
         let crop = upright.cropped(to: CGRect(x: upright.extent.minX + box.minX * image.width,
                                               y: upright.extent.minY + box.minY * image.height,
                                               width: box.width * image.width, height: box.height * image.height))
-        return Result(labels: labels, box: box, color: averageColor(of: crop), picture: tiny(crop))
+        return Result(labels: labels, box: box, color: averageColor(of: crop), picture: tiny(crop),
+                      standsOut: found != nil)
     }
 
     /// The bounding box of the separate object under the tap, if one stands out there.
@@ -54,8 +56,15 @@ enum ObjectScan {
         let pixels = base.assumingMemoryBound(to: UInt8.self)
         func instance(_ x: Int, _ row: Int) -> UInt8 { pixels[row * rowBytes + x] }  // row 0 is the top
 
-        let tx = min(max(Int(tap.x * Double(width)), 0), width - 1)
-        let ty = min(max(Int((1 - tap.y) * Double(height)), 0), height - 1)
+        // The mask may come back in the camera's own sideways orientation. If it's wider than
+        // tall, it's sideways: the picture's left-right runs along its rows, bottom to top.
+        let sideways = width > height
+        func maskPoint(_ p: CGPoint) -> (Int, Int) {
+            let fromTop = 1 - p.y
+            let (cx, cy) = sideways ? (fromTop, 1 - p.x) : (p.x, fromTop)
+            return (min(max(Int(cx * Double(width)), 0), width - 1), min(max(Int(cy * Double(height)), 0), height - 1))
+        }
+        let (tx, ty) = maskPoint(tap)
         let picked = instance(tx, ty)
         guard picked != 0 else { return nil }
 
@@ -65,8 +74,13 @@ enum ObjectScan {
                 minX = min(minX, x); maxX = max(maxX, x); minRow = min(minRow, row); maxRow = max(maxRow, row)
             }
         }
-        return CGRect(x: Double(minX) / Double(width), y: 1 - Double(maxRow + 1) / Double(height),
-                      width: Double(maxX - minX + 1) / Double(width), height: Double(maxRow - minRow + 1) / Double(height))
+        let w = Double(width), h = Double(height)
+        if sideways {
+            return CGRect(x: 1 - Double(maxRow + 1) / h, y: 1 - Double(maxX + 1) / w,
+                          width: Double(maxRow - minRow + 1) / h, height: Double(maxX - minX + 1) / w)
+        }
+        return CGRect(x: Double(minX) / w, y: 1 - Double(maxRow + 1) / h,
+                      width: Double(maxX - minX + 1) / w, height: Double(maxRow - minRow + 1) / h)
     }
 
     private static func averageColor(of image: CIImage) -> CGColor {
