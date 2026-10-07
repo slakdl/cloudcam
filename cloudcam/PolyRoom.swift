@@ -2,11 +2,10 @@ import ARKit
 import SceneKit
 import SwiftUI
 
-/// PlayStation 1 trash spilled across the real floor. ARKit finds the floor or a table in front
-/// of the camera and covers it with low-poly trash (see Trash), lit by the room's own light and
-/// casting shadows on the real surface. It stays put as you walk through it. Point the camera at
-/// a real object (or tap it) and a PS1 version of it appears on top of it (see ObjectScan and
-/// PolyModels).
+/// One real object, turned into a PlayStation 1 model. ARKit finds the floor; then whatever is
+/// under the cross in the middle of the view is recognized and a PS1 version of it appears on
+/// top of it (see ObjectScan and PolyModels), lit by the room's own light and casting a shadow.
+/// It stays put as you walk around it. Only one model is shown: tap another object to swap.
 final class PolyRoom: NSObject, ARSessionDelegate {
     let view = ARSCNView()
     private let group = SCNNode()
@@ -28,8 +27,8 @@ final class PolyRoom: NSObject, ARSessionDelegate {
         config.environmentTexturing = .automatic  // real reflections on the glossy objects
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         group.removeFromParentNode()
-        view.scene.rootNode.childNodes.filter { $0 !== group }.forEach { $0.removeFromParentNode() }
-        made = []
+        current?.removeFromParentNode()
+        current = nil
         placed = false
         frames = 0
     }
@@ -92,10 +91,10 @@ final class PolyRoom: NSObject, ARSessionDelegate {
     /// Every second and a half, check whatever is in the middle of the view, so pointing the
     /// camera at something is enough.
     private var lastLook = 0.0
-    private var made: [SIMD3<Float>] = []  // where models already stand, so nothing is done twice
+    private var current: SCNNode?  // the one model on show
 
     private func lookAtMiddle(_ frame: ARFrame) {
-        guard !scanning, frame.timestamp - lastLook > 1.5 else { return }
+        guard current == nil, !scanning, frame.timestamp - lastLook > 1.5 else { return }
         lastLook = frame.timestamp
         convert(at: CGPoint(x: view.bounds.midX, y: view.bounds.midY), automatic: true)
     }
@@ -105,7 +104,7 @@ final class PolyRoom: NSObject, ARSessionDelegate {
               let ray = view.raycastQuery(from: location, allowing: .estimatedPlane, alignment: .any)
         else { return }
         // Where the ray from the camera meets a real surface. ARKit often can't tell yet, so fall
-        // back on where the ray reaches the floor the trash is lying on.
+        // back on where the ray reaches the floor ARKit found at the start.
         let surfacePoint: SIMD3<Float>
         if let hit = view.session.raycast(ray).first {
             let p = hit.worldTransform.columns.3
@@ -157,7 +156,6 @@ final class PolyRoom: NSObject, ARSessionDelegate {
                     ?? PolyModels.block(picture: scan.picture, color: scan.color,
                                         height: Float(scan.box.height / max(scan.box.width, 0.01)) * 0.75)
                 drop(model, width: min(max(width, 0.05), 1.5), at: spot, facing: camera.eulerAngles.y)
-                made.append(spot)
                 onMessage?(label.map { "A " + $0.replacingOccurrences(of: "_", with: " ") + "!" } ?? "Something!")
             }
         }
@@ -175,6 +173,8 @@ final class PolyRoom: NSObject, ARSessionDelegate {
         let settle = SCNAction.scale(to: CGFloat(width), duration: 0.12)
         settle.timingMode = .easeInEaseOut
         model.runAction(.sequence([grow, settle]))
+        current?.removeFromParentNode()  // only one at a time
+        current = holder
         view.scene.rootNode.addChildNode(holder)
     }
 
@@ -183,12 +183,10 @@ final class PolyRoom: NSObject, ARSessionDelegate {
         group.eulerAngles.y = yaw  // the scene faces the camera
     }
 
-    // MARK: - The trash
+    // MARK: - Light and shadow
 
     private func build() {
-        group.addChildNode(Trash.pile())
-
-        // A light from above that casts the trash's shadows onto an invisible floor, so the
+        // A light from above that casts the model's shadow onto an invisible floor, so the
         // shadows land on the real surface.
         let light = SCNLight()
         light.type = .directional
