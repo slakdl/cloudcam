@@ -29,6 +29,7 @@ final class PolyRoom: NSObject, ARSessionDelegate {
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         group.removeFromParentNode()
         placed = false
+        frames = 0
     }
 
     func stop() {
@@ -43,12 +44,32 @@ final class PolyRoom: NSObject, ARSessionDelegate {
     // MARK: - Placing
 
     /// Until the objects are down, keep looking for a surface in the middle of the view.
+    private var frames = 0
+
+    /// Until the objects are down, look for a surface in the middle of the view. If none turns
+    /// up within a couple of seconds, set them down a metre ahead anyway, on the floor or table
+    /// the phone has found so far, or at about table height if it hasn't found one.
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard !placed, case .normal = frame.camera.trackingState else { return }
+        frames += 1
         let query = frame.raycastQuery(from: CGPoint(x: 0.5, y: 0.5), allowing: .estimatedPlane, alignment: .horizontal)
-        guard let hit = session.raycast(query).first else { return }
+        if let hit = session.raycast(query).first {
+            place(at: hit.worldTransform.columns.3, camera: frame.camera)
+        } else if frames > 120 {
+            let eye = frame.camera.transform.columns.3
+            var ahead = -SIMD3(frame.camera.transform.columns.2.x, 0, frame.camera.transform.columns.2.z)
+            ahead = simd_length(ahead) > 0.01 ? simd_normalize(ahead) : [0, 0, -1]
+            let surfaces = frame.anchors.compactMap { $0 as? ARPlaneAnchor }.filter { $0.alignment == .horizontal }
+            let height = surfaces.map { $0.transform.columns.3.y }.filter { $0 < eye.y - 0.2 }.max() ?? eye.y - 0.6
+            place(at: SIMD4(eye.x + ahead.x, height, eye.z + ahead.z, 1), camera: frame.camera)
+        }
+    }
+
+    private func place(at point: SIMD4<Float>, camera: ARCamera) {
         placed = true
-        put(at: hit.worldTransform, facing: frame.camera.eulerAngles.y)
+        var transform = matrix_identity_float4x4
+        transform.columns.3 = point
+        put(at: transform, facing: camera.eulerAngles.y)
         view.scene.rootNode.addChildNode(group)
     }
 
@@ -58,9 +79,7 @@ final class PolyRoom: NSObject, ARSessionDelegate {
               let camera = view.session.currentFrame?.camera
         else { return }
         if !placed {
-            placed = true
-            view.scene.rootNode.addChildNode(group)
-            put(at: hit.worldTransform, facing: camera.eulerAngles.y)
+            place(at: hit.worldTransform.columns.3, camera: camera)
             return
         }
         SCNTransaction.begin()
