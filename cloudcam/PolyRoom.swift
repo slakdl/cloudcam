@@ -102,20 +102,33 @@ final class PolyRoom: NSObject, ARSessionDelegate {
 
     private func convert(at location: CGPoint, automatic: Bool) {
         guard !scanning, let frame = view.session.currentFrame,
-              let surface = view.raycastQuery(from: location, allowing: .estimatedPlane, alignment: .any)
-                  .flatMap({ view.session.raycast($0).first })
-        else {
+              let ray = view.raycastQuery(from: location, allowing: .estimatedPlane, alignment: .any)
+        else { return }
+        // Where the ray from the camera meets a real surface. ARKit often can't tell yet, so fall
+        // back on where the ray reaches the floor the trash is lying on.
+        let surfacePoint: SIMD3<Float>
+        if let hit = view.session.raycast(ray).first {
+            let p = hit.worldTransform.columns.3
+            surfacePoint = SIMD3(p.x, p.y, p.z)
+        } else if ray.direction.y < -0.05 {
+            let t = (group.simdPosition.y - ray.origin.y) / ray.direction.y
+            surfacePoint = ray.origin + ray.direction * t
+        } else {
             if !automatic { onMessage?("Point at an object sitting on a surface") }
             return
         }
-        // Where the model stands: the floor or table under the spot if there is one.
-        let ground = view.raycastQuery(from: location, allowing: .estimatedPlane, alignment: .horizontal)
-            .flatMap { view.session.raycast($0).first } ?? surface
-        let spot = SIMD3(ground.worldTransform.columns.3.x, ground.worldTransform.columns.3.y, ground.worldTransform.columns.3.z)
-        if automatic && made.contains(where: { simd_distance($0, spot) < 0.3 }) { return }
+        // Where the model stands: the floor or table under the spot if ARKit found one.
+        var groundPoint = surfacePoint
+        if let hit = view.raycastQuery(from: location, allowing: .estimatedPlane, alignment: .horizontal)
+            .flatMap({ view.session.raycast($0).first }) {
+            let p = hit.worldTransform.columns.3
+            groundPoint = SIMD3(p.x, p.y, p.z)
+        }
+        let spot = groundPoint
 
         let camera = frame.camera
-        let distance = simd_distance(surface.worldTransform.columns.3, camera.transform.columns.3)
+        let eye = camera.transform.columns.3
+        let distance = simd_distance(surfacePoint, SIMD3(eye.x, eye.y, eye.z))
         let buffer = frame.capturedImage
         let size = view.bounds.size
 
@@ -143,7 +156,7 @@ final class PolyRoom: NSObject, ARSessionDelegate {
                 let model = label.flatMap { PolyModels.model(for: $0, color: scan.color) }
                     ?? PolyModels.block(picture: scan.picture, color: scan.color,
                                         height: Float(scan.box.height / max(scan.box.width, 0.01)) * 0.75)
-                drop(model, width: min(max(width, 0.05), 1.5), at: ground.worldTransform, facing: camera.eulerAngles.y)
+                drop(model, width: min(max(width, 0.05), 1.5), at: spot, facing: camera.eulerAngles.y)
                 made.append(spot)
                 onMessage?(label.map { "A " + $0.replacingOccurrences(of: "_", with: " ") + "!" } ?? "Something!")
             }
@@ -151,9 +164,9 @@ final class PolyRoom: NSObject, ARSessionDelegate {
     }
 
     /// Sets a model down, scaled to `width` metres, with a little pop.
-    private func drop(_ model: SCNNode, width: Float, at transform: simd_float4x4, facing yaw: Float) {
+    private func drop(_ model: SCNNode, width: Float, at spot: SIMD3<Float>, facing yaw: Float) {
         let holder = SCNNode()
-        holder.simdPosition = SIMD3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+        holder.simdPosition = spot
         holder.eulerAngles.y = yaw
         holder.addChildNode(model)
         model.scale = SCNVector3(0.01, 0.01, 0.01)

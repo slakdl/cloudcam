@@ -25,6 +25,12 @@ struct ContentView: View {
 
             if mode == .poly {
                 PolyView(room: room).ignoresSafeArea()
+                // Whatever sits under the cross gets turned into a PS1 model.
+                Image(systemName: "plus")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(.white)
+                    .shadow(radius: 2)
+                    .allowsHitTesting(false)
             } else {
                 CameraPreviewView(
                     renderer: renderer,
